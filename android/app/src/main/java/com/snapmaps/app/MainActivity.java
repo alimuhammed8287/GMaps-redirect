@@ -5,9 +5,12 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.WindowManager;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -47,10 +50,18 @@ public class MainActivity extends Activity {
     private LinearLayout historyView;
     private Uri pendingImage;
     private boolean autoOpenAfterScan;
+    private boolean shareOnly;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("snap_maps", MODE_PRIVATE);
+        if (Intent.ACTION_SEND.equals(getIntent().getAction())) {
+            shareOnly = true;
+            getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
+            acceptIntent(getIntent());
+            return;
+        }
         buildUi();
         acceptIntent(getIntent());
     }
@@ -262,7 +273,7 @@ public class MainActivity extends Activity {
     private void openMaps(String place) {
         if (place == null || place.trim().isEmpty()) { setStatus("Add a destination first."); return; }
         savePlace(place);
-        try { String query = URLEncoder.encode(place.trim(), "UTF-8"); Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/dir/?api=1&destination=" + query + "&travelmode=two-wheeler")); startActivity(i); }
+        try { String query = URLEncoder.encode(place.trim(), "UTF-8"); Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/dir/?api=1&destination=" + query + "&travelmode=two-wheeler")); startActivity(i); if (shareOnly) finish(); }
         catch (Exception ex) { setStatus("Google Maps could not be opened."); }
     }
 
@@ -275,7 +286,15 @@ public class MainActivity extends Activity {
     private Button button(String label) { Button b = new Button(this); b.setText(label); b.setAllCaps(false); return b; }
     private LinearLayout.LayoutParams margin(int l, int t, int r, int b) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.setMargins(l, t, r, b); return p; }
     private int dp(int value) { return (int)(value * getResources().getDisplayMetrics().density + 0.5f); }
-    private void setStatus(String message) { if (status != null) status.setText(message); }
+    private void setStatus(String message) {
+        if (status != null) { status.setText(message); return; }
+        if (!shareOnly) return;
+        if (message.startsWith("Reading screenshot")) Toast.makeText(this, "Reading screenshot…", Toast.LENGTH_SHORT).show();
+        else if (message.startsWith("Could not") || message.startsWith("The shared item") || message.startsWith("No clear")) {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+            finish();
+        }
+    }
     @Override protected void onDestroy() { super.onDestroy(); worker.shutdown(); }
 }
 
