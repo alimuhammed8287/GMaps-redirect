@@ -12,7 +12,7 @@ A screenshot-to-directions tool with a mobile web version and a native Android a
 
 ## Native Android app
 
-The native app source is under `android/`. The screenshot share receiver shows only a brief reading notice, then launches Maps directly. On first OCR use it downloads the English and Kannada Tesseract models from the official `tessdata_fast` repository into app-private storage. Subsequent scans reuse the local models.
+The native app source is under `android/`. The screenshot share receiver shows only a brief reading notice, then launches Maps directly. Bundled on-device ML Kit reads English immediately; if it cannot find a destination, Tesseract reads English and Kannada after downloading those models into app-private storage.
 
 Pushes to `main` that change the Android project start the **Build signed Android APK** GitHub Actions workflow. Download the `snap-maps-signed-apk` artifact from the workflow run. The default workflow fallback creates a one-run signing key; configure the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` to keep the same signing identity for future updates. Without a persistent key, a later APK cannot update-install over the earlier one.
 
@@ -30,4 +30,3 @@ Google Maps two-wheeler routes are only available in supported regions. OCR can 
 - `manifest.webmanifest` — install and share-target configuration
 - `sw.js` — receives the shared image and passes it to the app
 - `icon.svg` — app icon
-

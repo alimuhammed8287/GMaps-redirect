@@ -3,6 +3,7 @@ package com.snapmaps.app;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.ClipData;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -10,7 +11,6 @@ import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
-import android.view.WindowManager;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -20,6 +20,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.googlecode.tesseract.android.TessBaseAPI;
+import com.google.android.gms.tasks.Tasks;
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.text.TextRecognition;
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -55,10 +59,9 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("snap_maps", MODE_PRIVATE);
-        if (Intent.ACTION_SEND.equals(getIntent().getAction())) {
+        if (isImageShare(getIntent())) {
             shareOnly = true;
             getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
             acceptIntent(getIntent());
             return;
         }
@@ -128,8 +131,16 @@ public class MainActivity extends Activity {
     }
 
     private void acceptIntent(Intent intent) {
-        if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
-        Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        if (!isImageShare(intent)) return;
+        Uri uri = null;
+        if (Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction())) {
+            ArrayList<Uri> streams = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+            if (streams != null && !streams.isEmpty()) uri = streams.get(0);
+        } else {
+            uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        }
+        if (uri == null && intent.getClipData() != null && intent.getClipData().getItemCount() > 0)
+            uri = intent.getClipData().getItemAt(0).getUri();
         if (uri == null) { setStatus("The shared item did not include an image."); return; }
         pendingImage = uri;
         autoOpenAfterScan = true;
@@ -139,33 +150,57 @@ public class MainActivity extends Activity {
     private void scanSharedImage() {
         final Uri uri = pendingImage;
         if (uri == null) return;
-        setStatus("Reading screenshot in English and Kannada… first use downloads OCR language data.");
+        setStatus("Reading screenshot…");
         worker.execute(() -> {
             try {
-                File data = new File(getFilesDir(), "tessdata");
-                if (!data.exists() && !data.mkdirs()) throw new IllegalStateException("Cannot create OCR data folder");
-                downloadModel(data, "eng");
-                downloadModel(data, "kan");
                 Bitmap bitmap;
                 try (InputStream in = getContentResolver().openInputStream(uri)) { bitmap = BitmapFactory.decodeStream(in); }
                 if (bitmap == null) throw new IllegalArgumentException("Could not decode this image");
-                TessBaseAPI api = new TessBaseAPI();
-                if (!api.init(getFilesDir().getAbsolutePath(), "eng+kan")) throw new IllegalStateException("OCR could not initialize");
-                api.setImage(bitmap);
-                String result = api.getUTF8Text();
-                api.recycle(); bitmap.recycle();
-                String candidate = chooseCandidate(result);
+                String candidate = readWithLatinOcr(bitmap);
+                if (candidate.isEmpty()) {
+                    File data = new File(getFilesDir(), "tessdata");
+                    if (!data.exists() && !data.mkdirs()) throw new IllegalStateException("Cannot create OCR data folder");
+                    downloadModel(data, "eng");
+                    candidate = runTesseract(bitmap, "eng");
+                    if (candidate.isEmpty()) {
+                        downloadModel(data, "kan");
+                        candidate = runTesseract(bitmap, "eng+kan");
+                    }
+                }
+                bitmap.recycle();
+                final String detected = candidate;
                 runOnUiThread(() -> {
-                    if (candidate.isEmpty()) { setStatus("No clear address was found. Add a nearby place or landmark below."); return; }
-                    destination.setText(candidate);
-                    savePlace(candidate);
+                    if (detected.isEmpty()) { setStatus("No clear address was found. Add a nearby place or landmark below."); return; }
+                    if (destination != null) destination.setText(detected);
+                    savePlace(detected);
                     setStatus("Destination found. Opening Google Maps…");
-                    if (autoOpenAfterScan) { autoOpenAfterScan = false; openMaps(candidate); }
+                    if (autoOpenAfterScan) { autoOpenAfterScan = false; openMaps(detected); }
                 });
             } catch (Exception ex) {
                 runOnUiThread(() -> setStatus("Could not read the screenshot: " + ex.getMessage()));
             }
         });
+    }
+
+    private String readWithLatinOcr(Bitmap bitmap) {
+        com.google.mlkit.vision.text.TextRecognizer recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
+        try { return chooseCandidate(Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0))).getText()); }
+        catch (Exception ignored) { return ""; }
+        finally { recognizer.close(); }
+    }
+
+    private String runTesseract(Bitmap bitmap, String languages) throws Exception {
+        TessBaseAPI api = new TessBaseAPI();
+        try {
+            if (!api.init(getFilesDir().getAbsolutePath(), languages)) throw new IllegalStateException("OCR could not initialize");
+            api.setImage(bitmap);
+            return chooseCandidate(api.getUTF8Text());
+        } finally { api.recycle(); }
+    }
+
+    private boolean isImageShare(Intent intent) {
+        if (intent == null) return false;
+        return Intent.ACTION_SEND.equals(intent.getAction()) || Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction());
     }
 
     private void downloadModel(File folder, String language) throws Exception {
@@ -273,13 +308,26 @@ public class MainActivity extends Activity {
     private void openMaps(String place) {
         if (place == null || place.trim().isEmpty()) { setStatus("Add a destination first."); return; }
         savePlace(place);
-        try { String query = URLEncoder.encode(place.trim(), "UTF-8"); Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/dir/?api=1&destination=" + query + "&travelmode=two-wheeler")); startActivity(i); if (shareOnly) finish(); }
+        try {
+            String query = URLEncoder.encode(place.trim(), "UTF-8");
+            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/dir/?api=1&destination=" + query + "&travelmode=two-wheeler"));
+            i.setPackage("com.google.android.apps.maps");
+            try { startActivity(i); }
+            catch (android.content.ActivityNotFoundException noMapsApp) { i.setPackage(null); startActivity(i); }
+            if (shareOnly) finish();
+        }
         catch (Exception ex) { setStatus("Google Maps could not be opened."); }
     }
 
     private void openSearch(String place) {
         if (place == null || place.trim().isEmpty()) { setStatus("Add a place first."); return; }
-        try { String query = URLEncoder.encode(place.trim(), "UTF-8"); startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/search/?api=1&query=" + query))); }
+        try {
+            String query = URLEncoder.encode(place.trim(), "UTF-8");
+            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/search/?api=1&query=" + query));
+            i.setPackage("com.google.android.apps.maps");
+            try { startActivity(i); }
+            catch (android.content.ActivityNotFoundException noMapsApp) { i.setPackage(null); startActivity(i); }
+        }
         catch (Exception ex) { setStatus("Google Maps could not be opened."); }
     }
 
@@ -290,11 +338,10 @@ public class MainActivity extends Activity {
         if (status != null) { status.setText(message); return; }
         if (!shareOnly) return;
         if (message.startsWith("Reading screenshot")) Toast.makeText(this, "Reading screenshot…", Toast.LENGTH_SHORT).show();
-        else if (message.startsWith("Could not") || message.startsWith("The shared item") || message.startsWith("No clear")) {
+        else if (message.startsWith("Could not") || message.startsWith("The shared item") || message.startsWith("No clear") || message.startsWith("Google Maps could not")) {
             Toast.makeText(this, message, Toast.LENGTH_LONG).show();
             finish();
         }
     }
     @Override protected void onDestroy() { super.onDestroy(); worker.shutdown(); }
 }
-

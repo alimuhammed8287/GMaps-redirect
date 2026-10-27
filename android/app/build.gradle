@@ -11,8 +11,8 @@ android {
         applicationId 'com.snapmaps.app'
         minSdk 23
         targetSdk 35
-        versionCode 1
-        versionName '1.0'
+        versionCode 3
+        versionName '1.2'
     }
 
     compileOptions {
@@ -42,5 +42,5 @@ android {
 
 dependencies {
     implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'
+    implementation 'com.google.mlkit:text-recognition:16.0.1'
 }
-
