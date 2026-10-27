@@ -153,7 +153,7 @@ public class MainActivity extends Activity {
                 if (!api.init(getFilesDir().getAbsolutePath(), "eng+kan")) throw new IllegalStateException("OCR could not initialize");
                 api.setImage(bitmap);
                 String result = api.getUTF8Text();
-                api.end(); bitmap.recycle();
+                api.recycle(); bitmap.recycle();
                 String candidate = chooseCandidate(result);
                 runOnUiThread(() -> {
                     if (candidate.isEmpty()) { setStatus("No clear address was found. Add a nearby place or landmark below."); return; }
