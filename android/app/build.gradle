@@ -1,0 +1,46 @@
+plugins {
+    id 'com.android.application'
+}
+
+def signingPath = System.getenv('ANDROID_KEYSTORE_PATH')
+android {
+    namespace 'com.snapmaps.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.snapmaps.app'
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    signingConfigs {
+        release {
+            if (signingPath) {
+                storeFile file(signingPath)
+                storeType System.getenv('ANDROID_KEYSTORE_TYPE') ?: 'PKCS12'
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (signingPath) signingConfig signingConfigs.release
+        }
+    }
+}
+
+dependencies {
+    implementation 'cz.adaptech.tesseract4android:tesseract4android:4.9.0'
+}
+
