@@ -2,7 +2,7 @@
 
 Target device: Redmi Note 12 5G, Android 14 / SDK 34.
 Version declared in source: versionName 1.3, versionCode 4.
-Artifact: none for this update; building requires Ali's separate confirmation.
+Artifact: build authorized by Ali; release validation is in progress.
 
 ## Confirmed scope mapped to source
 
@@ -31,7 +31,7 @@ These checks do not establish Android compilation, OCR accuracy, or device behav
 
 - Compile, run AddressExtractorTest, run Android lint, assemble and verify the release signature.
 - Cross-check the merged manifest, version, resources, and packaged classes against every confirmed item above.
-- Use a persistent signing key for future updates; resolve the existing workflow's signing-secret environment propagation before using secrets.
+- Permanent signing key and repository secrets are configured; the workflow now propagates all signing variables and rejects a missing or different key.
 - Record the resulting artifact filename, version, SHA-256, certificate identity, and GitHub URL.
 
 ## Device scenarios still pending

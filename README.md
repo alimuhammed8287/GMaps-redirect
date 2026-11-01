@@ -59,7 +59,9 @@ gradle --no-daemon -p android :app:testDebugUnitTest :app:lintDebug :app:assembl
 
 The existing GitHub workflow builds on Android-related pushes to **main**, or manual dispatch. The feature branch does not automatically build. Download published artifacts from the GitHub Actions run.
 
-The workflow currently falls back to a different temporary signing key each run. These APKs cannot update-install over one another. A persistent signing identity must be established before relying on history-preserving updates. Do not commit signing keys or passwords. The existing workflow's persistent-secret environment propagation also needs correction before using that path.
+The workflow requires the four permanent signing secrets: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. It no longer generates a temporary key. The public certificate SHA-256 is pinned in `android/release-signing-certificate.sha256`, and the finished APK is checked against that identity. Private keys and passwords are never committed.
+
+Older APKs were signed with temporary keys. Installing 1.3 over one of those APKs may be rejected by Android. Export old history before uninstalling: uninstalling removes app data, and CSV export is a backup for reference, not an import/restore feature. Future releases signed with the permanent key can update-install over 1.3 and retain history.
 
 ## Web prototype
 
