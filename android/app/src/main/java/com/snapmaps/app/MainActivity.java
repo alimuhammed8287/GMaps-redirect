@@ -60,15 +60,15 @@ public final class MainActivity extends Activity {
         RadioGroup mode = new RadioGroup(this);
         mode.setOrientation(RadioGroup.HORIZONTAL);
         RadioButton bike = new RadioButton(this);
-        bike.setText("Bike (motorbike)"); bike.setId(1001); bike.setMinHeight(dp(48));
+        bike.setText(R.string.mode_bike); bike.setId(R.id.mode_bike); bike.setMinHeight(dp(48));
         RadioButton car = new RadioButton(this);
-        car.setText("Car"); car.setId(1002); car.setMinHeight(dp(48));
+        car.setText(R.string.mode_car); car.setId(R.id.mode_car); car.setMinHeight(dp(48));
         mode.addView(bike, new LinearLayout.LayoutParams(0, -2, 1));
         mode.addView(car, new LinearLayout.LayoutParams(0, -2, 1));
-        mode.check(AppSettings.CAR.equals(AppSettings.mode(this)) ? 1002 : 1001);
+        mode.check(AppSettings.CAR.equals(AppSettings.mode(this)) ? R.id.mode_car : R.id.mode_bike);
         page.addView(mode);
         mode.setOnCheckedChangeListener((group, id) -> {
-            AppSettings.setMode(this, id == 1002 ? AppSettings.CAR : AppSettings.BIKE);
+            AppSettings.setMode(this, id == R.id.mode_car ? AppSettings.CAR : AppSettings.BIKE);
             updateDirectionsLabel();
         });
         page.addView(label("Used for screenshot shares, capture shortcuts, and reopening history.", 13));
@@ -164,7 +164,7 @@ public final class MainActivity extends Activity {
 
     private void refreshSettings() {
         String selected = AppSettings.prefs(this).getString("capture_app_label", "");
-        rideApp.setText(selected.isEmpty() ? "Choose ride app" : "Ride app: " + selected);
+        rideApp.setText(selected.isEmpty() ? getString(R.string.choose_ride_app) : getString(R.string.ride_app_selected, selected));
         if (Build.VERSION.SDK_INT < 30) {
             captureStatus.setText("Screen capture needs Android 11 or newer. You can still share screenshots.");
         } else {

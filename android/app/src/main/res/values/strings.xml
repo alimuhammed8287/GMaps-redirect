@@ -1,3 +1,7 @@
 <resources>
+    <string name="mode_bike">Bike (motorbike)</string>
+    <string name="mode_car">Car</string>
+    <string name="choose_ride_app">Choose ride app</string>
+    <string name="ride_app_selected">Ride app: %1$s</string>
     <string name="capture_accessibility_description">When you trigger Scan to Maps, identify the visible ride app, capture its screen, read the bottom address on your phone, and open Google Maps. Screenshots are discarded after reading. No continuous screen capture, automatic taps, or background scanning. Disable this service at any time; sharing screenshots still works.</string>
 </resources>

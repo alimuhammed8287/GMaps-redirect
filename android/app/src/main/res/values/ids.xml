@@ -1,0 +1,4 @@
+<resources>
+    <item name="mode_bike" type="id" />
+    <item name="mode_car" type="id" />
+</resources>
