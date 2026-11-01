@@ -1,0 +1,3 @@
+<resources>
+    <string name="capture_accessibility_description">When you trigger Scan to Maps, identify the visible ride app, capture its screen, read the bottom address on your phone, and open Google Maps. Screenshots are discarded after reading. No continuous screen capture, automatic taps, or background scanning. Disable this service at any time; sharing screenshots still works.</string>
+</resources>

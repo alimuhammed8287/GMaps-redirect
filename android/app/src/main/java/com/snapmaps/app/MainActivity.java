@@ -1,347 +1,329 @@
 package com.snapmaps.app;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.ClipData;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.Color;
-import android.graphics.drawable.ColorDrawable;
+import android.content.pm.ResolveInfo;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
-import android.widget.Toast;
-
-import com.googlecode.tesseract.android.TessBaseAPI;
-import com.google.android.gms.tasks.Tasks;
-import com.google.mlkit.vision.common.InputImage;
-import com.google.mlkit.vision.text.TextRecognition;
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
-
 import org.json.JSONArray;
 import org.json.JSONObject;
-
-import java.io.BufferedInputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.text.DateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
-import java.util.Locale;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
-public class MainActivity extends Activity {
-    private static final String HISTORY_KEY = "history";
-    private static final int EXPORT_REQUEST = 41;
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private SharedPreferences prefs;
+public final class MainActivity extends Activity {
+    private static final int PICK_IMAGE = 40, EXPORT_HISTORY = 41;
     private EditText destination;
-    private TextView status;
+    private TextView status, captureStatus;
+    private Button directions, rideApp;
     private LinearLayout historyView;
-    private Uri pendingImage;
-    private boolean autoOpenAfterScan;
-    private boolean shareOnly;
+    private Switch drawerIcon;
+    private ScanCoordinator.Request request;
+    private final SharedPreferences.OnSharedPreferenceChangeListener preferencesChanged = (prefs, key) -> {
+        if ("history".equals(key)) renderHistory();
+        if ("last_scan_status".equals(key)) status.setText(prefs.getString(key, ""));
+    };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        prefs = getSharedPreferences("snap_maps", MODE_PRIVATE);
-        if (isImageShare(getIntent())) {
-            shareOnly = true;
-            getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            acceptIntent(getIntent());
-            return;
-        }
         buildUi();
-        acceptIntent(getIntent());
-    }
-
-    @Override public void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        setIntent(intent);
-        acceptIntent(intent);
+        if (state != null) destination.setText(state.getString("destination", ""));
     }
 
     private void buildUi() {
-        int pad = dp(18);
-        LinearLayout page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(pad, pad, pad, pad);
+        LinearLayout page = column();
+        page.setPadding(dp(18), dp(18), dp(18), dp(24));
         page.setBackgroundColor(0xfff5f7f4);
+        page.addView(label("Snap to Maps", 25));
+        page.addView(label("Share a screenshot to read its bottom address and open Google Maps.", 14), spaced());
 
-        TextView title = new TextView(this);
-        title.setText("Snap to Maps"); title.setTextSize(25); title.setTextColor(0xff18211d);
-        page.addView(title);
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Share a screenshot here to open its destination in bike mode.");
-        subtitle.setTextSize(14); subtitle.setTextColor(0xff64716a);
-        page.addView(subtitle, margin(0, dp(4), 0, dp(14)));
+        page.addView(label("Travel mode", 18), spaced());
+        RadioGroup mode = new RadioGroup(this);
+        mode.setOrientation(RadioGroup.HORIZONTAL);
+        RadioButton bike = new RadioButton(this);
+        bike.setText("Bike (motorbike)"); bike.setId(1001); bike.setMinHeight(dp(48));
+        RadioButton car = new RadioButton(this);
+        car.setText("Car"); car.setId(1002); car.setMinHeight(dp(48));
+        mode.addView(bike, new LinearLayout.LayoutParams(0, -2, 1));
+        mode.addView(car, new LinearLayout.LayoutParams(0, -2, 1));
+        mode.check(AppSettings.CAR.equals(AppSettings.mode(this)) ? 1002 : 1001);
+        page.addView(mode);
+        mode.setOnCheckedChangeListener((group, id) -> {
+            AppSettings.setMode(this, id == 1002 ? AppSettings.CAR : AppSettings.BIKE);
+            updateDirectionsLabel();
+        });
+        page.addView(label("Used for screenshot shares, capture shortcuts, and reopening history.", 13));
+
+        page.addView(label("Capture shortcut", 19), spaced());
+        drawerIcon = buttonSwitch("Show additional Scan to Maps icon");
+        drawerIcon.setChecked(AppSettings.isShortcutShown(this));
+        drawerIcon.setEnabled(Build.VERSION.SDK_INT >= 30);
+        drawerIcon.setOnCheckedChangeListener((button, enabled) -> {
+            try {
+                AppSettings.showShortcut(this, enabled);
+                setStatus(enabled ? "Scan to Maps icon enabled. Your launcher may take a moment to refresh."
+                        : "Extra icon hidden. The main app and gesture activity remain available.");
+            } catch (RuntimeException failure) {
+                drawerIcon.setChecked(AppSettings.isShortcutShown(this));
+                setStatus("Could not change the launcher icon. Please try again.");
+            }
+        });
+        page.addView(drawerIcon);
+        rideApp = button("Choose ride app");
+        rideApp.setOnClickListener(view -> chooseRideApp());
+        page.addView(rideApp, spaced());
+        page.addView(label("The drawer icon returns to this app before scanning. Keep its bottom address card open. "
+                + "A gesture can launch the Scan to Maps activity directly over the visible ride app.", 13));
+        Button access = button("Set up screen capture");
+        access.setEnabled(Build.VERSION.SDK_INT >= 30);
+        access.setOnClickListener(view -> explainAccessibility());
+        page.addView(access, spaced());
+        captureStatus = label("", 13);
+        page.addView(captureStatus);
+        page.addView(label("Capture runs only when you trigger it. Screenshot sharing does not need Accessibility access.", 13), spaced());
 
         Button choose = button("Choose screenshot");
-        choose.setOnClickListener(v -> { Intent i = new Intent(Intent.ACTION_GET_CONTENT); i.setType("image/*"); startActivityForResult(i, 40); });
-        page.addView(choose, margin(0, 0, 0, dp(10)));
-
+        choose.setOnClickListener(view -> {
+            Intent image = new Intent(Intent.ACTION_GET_CONTENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE);
+            try { startActivityForResult(image, PICK_IMAGE); }
+            catch (RuntimeException unavailable) { setStatus("No image picker is available."); }
+        });
+        page.addView(choose, spaced());
         destination = new EditText(this);
         destination.setHint("Detected destination or place");
-        destination.setMinLines(2); destination.setGravity(Gravity.TOP); destination.setTextSize(16);
-        page.addView(destination, margin(0, 0, 0, dp(8)));
+        destination.setMinLines(2);
+        destination.setGravity(Gravity.TOP);
+        destination.setTextSize(16);
+        page.addView(destination, spaced());
+        directions = button("");
+        directions.setOnClickListener(view -> openMaps(destination.getText().toString()));
+        page.addView(directions);
+        updateDirectionsLabel();
+        Button search = button("Find place");
+        search.setOnClickListener(view -> {
+            String place = destination.getText().toString().trim();
+            if (place.isEmpty()) { setStatus("Add a place first."); return; }
+            try { MapsLauncher.search(this, place); }
+            catch (RuntimeException unavailable) { setStatus("Google Maps could not be opened."); }
+        });
+        page.addView(search);
+        status = label("", 14);
+        page.addView(status, spaced());
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        Button open = button("🏍  Bike directions");
-        open.setOnClickListener(v -> openMaps(destination.getText().toString()));
-        Button find = button("Find place");
-        find.setOnClickListener(v -> openSearch(destination.getText().toString()));
-        actions.addView(open, new LinearLayout.LayoutParams(0, dp(50), 1));
-        actions.addView(find, new LinearLayout.LayoutParams(0, dp(50), 1));
-        page.addView(actions, margin(0, 0, 0, dp(8)));
-
-        status = new TextView(this); status.setTextSize(14); status.setTextColor(0xff59665d);
-        page.addView(status, margin(0, 0, 0, dp(12)));
-
-        TextView section = new TextView(this); section.setText("Recent destinations"); section.setTextSize(19); section.setTextColor(0xff18211d);
-        page.addView(section, margin(0, dp(8), 0, dp(4)));
-        TextView local = new TextView(this); local.setText("Saved only on this phone. Favorite entries with ☆."); local.setTextSize(13); local.setTextColor(0xff64716a);
-        page.addView(local, margin(0, 0, 0, dp(8)));
-        historyView = new LinearLayout(this); historyView.setOrientation(LinearLayout.VERTICAL);
+        page.addView(label("Recent destinations", 20), spaced());
+        page.addView(label("Last 50 destinations. Screenshots are not saved in history.", 13));
+        historyView = column();
         page.addView(historyView);
+        Button export = button("Export history");
+        export.setOnClickListener(view -> {
+            Intent document = new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/csv")
+                    .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE, "snap-maps-history.csv");
+            try { startActivityForResult(document, EXPORT_HISTORY); }
+            catch (RuntimeException unavailable) { setStatus("No document picker is available."); }
+        });
+        page.addView(export, spaced());
+        Button clear = button("Clear history");
+        clear.setOnClickListener(view -> new AlertDialog.Builder(this).setTitle("Clear history?")
+                .setMessage("This removes saved destinations and favorites.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Clear", (dialog, which) -> HistoryStore.clear(this)).show());
+        page.addView(clear);
 
-        LinearLayout footer = new LinearLayout(this); footer.setOrientation(LinearLayout.HORIZONTAL);
-        Button export = button("Export history"); export.setOnClickListener(v -> startExport());
-        Button clear = button("Clear"); clear.setOnClickListener(v -> { prefs.edit().remove(HISTORY_KEY).apply(); renderHistory(); });
-        footer.addView(export, new LinearLayout.LayoutParams(0, dp(48), 1));
-        footer.addView(clear, new LinearLayout.LayoutParams(0, dp(48), 1));
-        page.addView(footer, margin(0, dp(10), 0, dp(10)));
-
-        ScrollView scroll = new ScrollView(this); scroll.addView(page); setContentView(scroll);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setFitsSystemWindows(true);
+        scroll.addView(page);
+        setContentView(scroll);
+        refreshSettings();
         renderHistory();
     }
 
-    private void acceptIntent(Intent intent) {
-        if (!isImageShare(intent)) return;
-        Uri uri = null;
-        if (Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction())) {
-            ArrayList<Uri> streams = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
-            if (streams != null && !streams.isEmpty()) uri = streams.get(0);
-        } else {
-            uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-        }
-        if (uri == null && intent.getClipData() != null && intent.getClipData().getItemCount() > 0)
-            uri = intent.getClipData().getItemAt(0).getUri();
-        if (uri == null) { setStatus("The shared item did not include an image."); return; }
-        pendingImage = uri;
-        autoOpenAfterScan = true;
-        scanSharedImage();
+    private void updateDirectionsLabel() {
+        if (directions != null) directions.setText(AppSettings.CAR.equals(AppSettings.mode(this))
+                ? "Open car navigation" : "Open bike navigation");
     }
 
-    private void scanSharedImage() {
-        final Uri uri = pendingImage;
-        if (uri == null) return;
-        setStatus("Reading screenshot…");
-        worker.execute(() -> {
-            try {
-                Bitmap bitmap;
-                try (InputStream in = getContentResolver().openInputStream(uri)) { bitmap = BitmapFactory.decodeStream(in); }
-                if (bitmap == null) throw new IllegalArgumentException("Could not decode this image");
-                String candidate = readWithLatinOcr(bitmap);
-                if (candidate.isEmpty()) {
-                    File data = new File(getFilesDir(), "tessdata");
-                    if (!data.exists() && !data.mkdirs()) throw new IllegalStateException("Cannot create OCR data folder");
-                    downloadModel(data, "eng");
-                    candidate = runTesseract(bitmap, "eng");
-                    if (candidate.isEmpty()) {
-                        downloadModel(data, "kan");
-                        candidate = runTesseract(bitmap, "eng+kan");
-                    }
-                }
-                bitmap.recycle();
-                final String detected = candidate;
-                runOnUiThread(() -> {
-                    if (detected.isEmpty()) { setStatus("No clear address was found. Add a nearby place or landmark below."); return; }
-                    if (destination != null) destination.setText(detected);
-                    savePlace(detected);
-                    setStatus("Destination found. Opening Google Maps…");
-                    if (autoOpenAfterScan) { autoOpenAfterScan = false; openMaps(detected); }
-                });
-            } catch (Exception ex) {
-                runOnUiThread(() -> setStatus("Could not read the screenshot: " + ex.getMessage()));
+    private void refreshSettings() {
+        String selected = AppSettings.prefs(this).getString("capture_app_label", "");
+        rideApp.setText(selected.isEmpty() ? "Choose ride app" : "Ride app: " + selected);
+        if (Build.VERSION.SDK_INT < 30) {
+            captureStatus.setText("Screen capture needs Android 11 or newer. You can still share screenshots.");
+        } else {
+            captureStatus.setText(CaptureService.connected() == null
+                    ? "Capture access is off. Set it up once to use the shortcut."
+                    : "Capture access is ready.");
+        }
+        status.setText(AppSettings.prefs(this).getString("last_scan_status", ""));
+    }
+
+    private void chooseRideApp() {
+        Intent query = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> resolved = getPackageManager().queryIntentActivities(query, 0);
+        List<ResolveInfo> apps = new ArrayList<>();
+        Set<String> packages = new HashSet<>();
+        for (ResolveInfo info : resolved) {
+            if (info.activityInfo == null) continue;
+            String packageName = info.activityInfo.packageName;
+            if (!packageName.equals(getPackageName()) && packages.add(packageName)) apps.add(info);
+        }
+        Collections.sort(apps, (a, b) -> a.loadLabel(getPackageManager()).toString()
+                .compareToIgnoreCase(b.loadLabel(getPackageManager()).toString()));
+        if (apps.isEmpty()) { setStatus("No launchable apps were found."); return; }
+        String[] labels = new String[apps.size()];
+        for (int i = 0; i < apps.size(); i++) labels[i] = apps.get(i).loadLabel(getPackageManager()).toString();
+        new AlertDialog.Builder(this).setTitle("Choose your ride app")
+                .setItems(labels, (dialog, which) -> {
+                    AppSettings.setCaptureApp(this, apps.get(which).activityInfo.packageName, labels[which]);
+                    refreshSettings();
+                }).setNegativeButton("Cancel", null).show();
+    }
+
+    private void explainAccessibility() {
+        new AlertDialog.Builder(this).setTitle("Enable screen capture")
+                .setMessage("Scan to Maps uses Accessibility access to identify the visible app and take a screenshot "
+                        + "only when you trigger its capture activity. The bottom address is read on your phone; "
+                        + "the screenshot is discarded. The service does not tap buttons or scan in the background.\n\n"
+                        + "On the next screen, enable Snap to Maps capture. You can turn it off there at any time. "
+                        + "If Android blocks this for an APK, open App info → menu → Allow restricted settings, then return.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Open settings", (dialog, which) -> {
+                    try { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
+                    catch (RuntimeException unavailable) { setStatus("Open Accessibility settings on your phone to enable capture."); }
+                }).show();
+    }
+
+    @Override protected void onActivityResult(int code, int result, Intent data) {
+        super.onActivityResult(code, result, data);
+        if (result != RESULT_OK || data == null || data.getData() == null) return;
+        if (code == PICK_IMAGE) scanPickedImage(data.getData());
+        if (code == EXPORT_HISTORY) exportCsv(data.getData());
+    }
+
+    private void scanPickedImage(Uri image) {
+        ScanCoordinator.Request next = ScanCoordinator.begin();
+        if (next == null) { setStatus("Another scan is already running. Please wait."); return; }
+        request = next;
+        setStatus("Reading bottom address…");
+        request.read(this, () -> OcrReader.decode(getApplicationContext(), image), new ScanCoordinator.Listener() {
+            @Override public void onAddress(String address) {
+                request = null;
+                if (isDestroyed() || isFinishing()) return;
+                destination.setText(address);
+                HistoryStore.save(MainActivity.this, address);
+                setStatus("Address ready. Tap navigation to open Maps.");
             }
+            @Override public void onError(String message) { request = null; setStatus(message); }
         });
     }
 
-    private String readWithLatinOcr(Bitmap bitmap) {
-        com.google.mlkit.vision.text.TextRecognizer recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
-        try { return chooseCandidate(Tasks.await(recognizer.process(InputImage.fromBitmap(bitmap, 0))).getText()); }
-        catch (Exception ignored) { return ""; }
-        finally { recognizer.close(); }
-    }
-
-    private String runTesseract(Bitmap bitmap, String languages) throws Exception {
-        TessBaseAPI api = new TessBaseAPI();
-        try {
-            if (!api.init(getFilesDir().getAbsolutePath(), languages)) throw new IllegalStateException("OCR could not initialize");
-            api.setImage(bitmap);
-            return chooseCandidate(api.getUTF8Text());
-        } finally { api.recycle(); }
-    }
-
-    private boolean isImageShare(Intent intent) {
-        if (intent == null) return false;
-        return Intent.ACTION_SEND.equals(intent.getAction()) || Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction());
-    }
-
-    private void downloadModel(File folder, String language) throws Exception {
-        File model = new File(folder, language + ".traineddata");
-        if (model.exists() && model.length() > 100_000) return;
-        URL url = new URL("https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/" + language + ".traineddata");
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-        connection.setConnectTimeout(20000); connection.setReadTimeout(60000);
-        try (InputStream in = new BufferedInputStream(connection.getInputStream()); OutputStream out = new FileOutputStream(model)) {
-            byte[] buffer = new byte[16384]; int n;
-            while ((n = in.read(buffer)) >= 0) out.write(buffer, 0, n);
-        } finally { connection.disconnect(); }
-    }
-
-    private String chooseCandidate(String raw) {
-        String[] lines = raw.split("\\R");
-        ArrayList<String> candidates = new ArrayList<>();
-        for (String line : lines) {
-            String clean = line.trim().replaceAll("\\s+", " ");
-            if (clean.length() < 5 || clean.matches(".*[0-9]{1,2}:[0-9]{2}.*")) continue;
-            String lower = clean.toLowerCase(Locale.ROOT);
-            if (lower.matches(".*(complete ride|go to drop|drop location|google|uber|km/h|battery|share).*")) continue;
-            if (clean.matches(".*[\\p{L}]{3,}.*")) candidates.add(clean);
-        }
-        if (candidates.isEmpty()) return "";
-        int start = Math.max(0, candidates.size() - 5);
-        StringBuilder answer = new StringBuilder();
-        for (int i = start; i < candidates.size(); i++) {
-            if (answer.length() > 0) answer.append(", ");
-            answer.append(candidates.get(i));
-        }
-        return answer.length() > 260 ? answer.substring(0, 260) : answer.toString();
-    }
-
-    private JSONArray readHistory() {
-        try { return new JSONArray(prefs.getString(HISTORY_KEY, "[]")); }
-        catch (Exception ignored) { return new JSONArray(); }
-    }
-
-    private void savePlace(String place) {
-        String normalized = place.trim(); if (normalized.isEmpty()) return;
-        JSONArray old = readHistory(); JSONArray next = new JSONArray();
-        boolean favorite = false;
-        for (int i = 0; i < old.length(); i++) {
-            JSONObject item = old.optJSONObject(i); if (item == null) continue;
-            if (item.optString("place").equalsIgnoreCase(normalized)) favorite = item.optBoolean("favorite");
-            else next.put(item);
-        }
-        JSONObject current = new JSONObject();
-        try { current.put("place", normalized); current.put("at", System.currentTimeMillis()); current.put("favorite", favorite); } catch (Exception ignored) { }
-        JSONArray saved = new JSONArray(); saved.put(current);
-        for (int i = 0; i < Math.min(next.length(), 49); i++) saved.put(next.optJSONObject(i));
-        prefs.edit().putString(HISTORY_KEY, saved.toString()).apply();
-        renderHistory();
+    private void openMaps(String place) {
+        if (place.trim().isEmpty()) { setStatus("Add a destination first."); return; }
+        try { MapsLauncher.directions(this, place, AppSettings.mode(this)); }
+        catch (RuntimeException unavailable) { setStatus("Could not open Maps. The address is saved in history."); }
     }
 
     private void renderHistory() {
         if (historyView == null) return;
-        historyView.removeAllViews(); JSONArray items = readHistory();
-        if (items.length() == 0) { TextView empty = new TextView(this); empty.setText("No saved destinations yet."); empty.setTextColor(0xff64716a); historyView.addView(empty); return; }
+        historyView.removeAllViews();
+        JSONArray items = HistoryStore.read(this);
+        if (items.length() == 0) { historyView.addView(label("No saved destinations yet.", 14), spaced()); return; }
         for (int i = 0; i < items.length(); i++) {
-            JSONObject item = items.optJSONObject(i); if (item == null) continue;
-            String place = item.optString("place"); boolean favorite = item.optBoolean("favorite"); long at = item.optLong("at");
-            LinearLayout row = new LinearLayout(this); row.setOrientation(LinearLayout.VERTICAL); row.setPadding(0, dp(8), 0, dp(8));
-            TextView name = new TextView(this); name.setText(place); name.setTextSize(15); name.setTextColor(0xff18211d); row.addView(name);
-            TextView date = new TextView(this); date.setText(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(new Date(at))); date.setTextSize(12); date.setTextColor(0xff748078); row.addView(date);
-            LinearLayout buttons = new LinearLayout(this); buttons.setOrientation(LinearLayout.HORIZONTAL);
-            Button open = button("Open in Maps"); open.setOnClickListener(v -> openMaps(place));
-            Button star = button(favorite ? "★ Favorite" : "☆ Favorite"); star.setOnClickListener(v -> setFavorite(place, !favorite));
-            Button remove = button("Remove"); remove.setOnClickListener(v -> removePlace(place));
-            buttons.addView(open, new LinearLayout.LayoutParams(0, dp(42), 1)); buttons.addView(star, new LinearLayout.LayoutParams(0, dp(42), 1)); buttons.addView(remove, new LinearLayout.LayoutParams(0, dp(42), 1));
-            row.addView(buttons); historyView.addView(row);
-            View divider = new View(this); divider.setBackgroundColor(0xffe5ebe5); historyView.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
+            JSONObject item = items.optJSONObject(i);
+            if (item == null) continue;
+            String place = item.optString("place");
+            boolean favorite = item.optBoolean("favorite");
+            LinearLayout row = column();
+            row.setPadding(0, dp(12), 0, dp(8));
+            row.addView(label(place, 16));
+            row.addView(label(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+                    .format(new Date(item.optLong("at"))), 12));
+            Button open = button("Open in Maps");
+            open.setOnClickListener(view -> openMaps(place));
+            row.addView(open);
+            LinearLayout actions = new LinearLayout(this);
+            Button star = button(favorite ? "★ Favorite" : "☆ Favorite");
+            star.setOnClickListener(view -> HistoryStore.favorite(this, place, !favorite));
+            Button remove = button("Remove");
+            remove.setOnClickListener(view -> HistoryStore.remove(this, place));
+            actions.addView(star, new LinearLayout.LayoutParams(0, -2, 1));
+            actions.addView(remove, new LinearLayout.LayoutParams(0, -2, 1));
+            row.addView(actions);
+            historyView.addView(row);
         }
-    }
-
-    private void setFavorite(String place, boolean value) {
-        JSONArray old = readHistory();
-        for (int i = 0; i < old.length(); i++) { JSONObject o = old.optJSONObject(i); if (o != null && o.optString("place").equals(place)) try { o.put("favorite", value); } catch (Exception ignored) { } }
-        prefs.edit().putString(HISTORY_KEY, old.toString()).apply(); renderHistory();
-    }
-
-    private void removePlace(String place) {
-        JSONArray old = readHistory(); JSONArray next = new JSONArray();
-        for (int i = 0; i < old.length(); i++) { JSONObject o = old.optJSONObject(i); if (o != null && !o.optString("place").equals(place)) next.put(o); }
-        prefs.edit().putString(HISTORY_KEY, next.toString()).apply(); renderHistory();
-    }
-
-    private void startExport() { Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT); i.setType("text/csv"); i.putExtra(Intent.EXTRA_TITLE, "snap-maps-history.csv"); startActivityForResult(i, EXPORT_REQUEST); }
-
-    @Override protected void onActivityResult(int request, int result, Intent data) {
-        super.onActivityResult(request, result, data);
-        if (request == 40 && result == RESULT_OK && data != null) { pendingImage = data.getData(); autoOpenAfterScan = false; scanSharedImage(); }
-        if (request == EXPORT_REQUEST && result == RESULT_OK && data != null && data.getData() != null) exportCsv(data.getData());
     }
 
     private void exportCsv(Uri uri) {
-        try (OutputStream out = getContentResolver().openOutputStream(uri)) {
-            out.write("Destination,Favorite,Saved at\n".getBytes(StandardCharsets.UTF_8)); JSONArray items = readHistory();
-            for (int i = 0; i < items.length(); i++) { JSONObject o = items.optJSONObject(i); if (o == null) continue; String p = o.optString("place").replace("\"", "\"\""); String row = "\"" + p + "\"," + o.optBoolean("favorite") + ",\"" + new Date(o.optLong("at")) + "\"\n"; out.write(row.getBytes(StandardCharsets.UTF_8)); }
+        try (OutputStream output = getContentResolver().openOutputStream(uri)) {
+            if (output == null) throw new IllegalStateException("No output file");
+            output.write("Destination,Favorite,Saved at\n".getBytes(StandardCharsets.UTF_8));
+            JSONArray items = HistoryStore.read(this);
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject item = items.optJSONObject(i);
+                if (item == null) continue;
+                String place = item.optString("place");
+                if (place.trim().matches("^[=+@-].*")) place = "'" + place;
+                String row = "\"" + place.replace("\"", "\"\"") + "\"," + item.optBoolean("favorite")
+                        + ",\"" + new Date(item.optLong("at")) + "\"\n";
+                output.write(row.getBytes(StandardCharsets.UTF_8));
+            }
             setStatus("History exported.");
-        } catch (Exception ex) { setStatus("Could not export history: " + ex.getMessage()); }
+        } catch (Exception failure) { setStatus("Could not export history."); }
     }
 
-    private void openMaps(String place) {
-        if (place == null || place.trim().isEmpty()) { setStatus("Add a destination first."); return; }
-        savePlace(place);
-        try {
-            String query = URLEncoder.encode(place.trim(), "UTF-8");
-            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/dir/?api=1&destination=" + query + "&travelmode=two-wheeler"));
-            i.setPackage("com.google.android.apps.maps");
-            try { startActivity(i); }
-            catch (android.content.ActivityNotFoundException noMapsApp) { i.setPackage(null); startActivity(i); }
-            if (shareOnly) finish();
-        }
-        catch (Exception ex) { setStatus("Google Maps could not be opened."); }
+    private LinearLayout column() { LinearLayout view = new LinearLayout(this); view.setOrientation(LinearLayout.VERTICAL); return view; }
+    private TextView label(String text, int size) {
+        TextView view = new TextView(this); view.setText(text); view.setTextSize(size);
+        view.setTextColor(0xff273c31); return view;
     }
+    private Button button(String text) {
+        Button view = new Button(this); view.setText(text); view.setAllCaps(false); view.setMinHeight(dp(48)); return view;
+    }
+    private Switch buttonSwitch(String text) {
+        Switch view = new Switch(this); view.setText(text); view.setMinHeight(dp(48)); view.setTextSize(15); return view;
+    }
+    private LinearLayout.LayoutParams spaced() {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+        params.setMargins(0, dp(10), 0, dp(8)); return params;
+    }
+    private int dp(int value) { return (int) (value * getResources().getDisplayMetrics().density + 0.5f); }
+    private void setStatus(String message) { status.setText(message); AppSettings.recordStatus(this, message); }
 
-    private void openSearch(String place) {
-        if (place == null || place.trim().isEmpty()) { setStatus("Add a place first."); return; }
-        try {
-            String query = URLEncoder.encode(place.trim(), "UTF-8");
-            Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/maps/search/?api=1&query=" + query));
-            i.setPackage("com.google.android.apps.maps");
-            try { startActivity(i); }
-            catch (android.content.ActivityNotFoundException noMapsApp) { i.setPackage(null); startActivity(i); }
-        }
-        catch (Exception ex) { setStatus("Google Maps could not be opened."); }
+    @Override protected void onStart() {
+        super.onStart();
+        AppSettings.prefs(this).registerOnSharedPreferenceChangeListener(preferencesChanged);
+        renderHistory();
     }
-
-    private Button button(String label) { Button b = new Button(this); b.setText(label); b.setAllCaps(false); return b; }
-    private LinearLayout.LayoutParams margin(int l, int t, int r, int b) { LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2); p.setMargins(l, t, r, b); return p; }
-    private int dp(int value) { return (int)(value * getResources().getDisplayMetrics().density + 0.5f); }
-    private void setStatus(String message) {
-        if (status != null) { status.setText(message); return; }
-        if (!shareOnly) return;
-        if (message.startsWith("Reading screenshot")) Toast.makeText(this, "Reading screenshot…", Toast.LENGTH_SHORT).show();
-        else if (message.startsWith("Could not") || message.startsWith("The shared item") || message.startsWith("No clear") || message.startsWith("Google Maps could not")) {
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-            finish();
+    @Override protected void onResume() { super.onResume(); refreshSettings(); }
+    @Override protected void onStop() {
+        AppSettings.prefs(this).unregisterOnSharedPreferenceChangeListener(preferencesChanged);
+        if (request != null) {
+            request.cancel();
+            request = null;
+            AppSettings.recordStatus(this, "Scan cancelled. Choose the screenshot again when ready.");
         }
+        super.onStop();
     }
-    @Override protected void onDestroy() { super.onDestroy(); worker.shutdown(); }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        state.putString("destination", destination.getText().toString());
+        super.onSaveInstanceState(state);
+    }
 }

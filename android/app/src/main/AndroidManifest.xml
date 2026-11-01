@@ -1,5 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+    </queries>
     <application
         android:allowBackup="true"
         android:label="Snap to Maps"
@@ -11,7 +21,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".ShareActivity" android:exported="true" android:noHistory="true" android:excludeFromRecents="true" android:theme="@style/Theme.SnapMaps.Share">
+        <activity android:name=".ShareActivity" android:exported="true" android:noHistory="true" android:excludeFromRecents="true" android:taskAffinity="com.snapmaps.app.share" android:theme="@style/Theme.SnapMaps.Share">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -23,5 +33,23 @@
                 <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
+        <activity android:name=".CaptureActivity" android:exported="true"
+            android:label="Scan to Maps" android:excludeFromRecents="true"
+            android:taskAffinity="com.snapmaps.app.capture" android:theme="@style/Theme.SnapMaps.Share" />
+        <activity-alias android:name=".CaptureLauncher" android:targetActivity=".CaptureActivity"
+            android:enabled="false" android:exported="true" android:label="Scan to Maps"
+            android:icon="@drawable/ic_capture">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <service android:name=".CaptureService" android:exported="true"
+            android:label="Snap to Maps capture" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/capture_service" />
+        </service>
     </application>
 </manifest>
