@@ -2,9 +2,9 @@
 
 Android screenshot-to-navigation app, with an older web prototype at the repository root.
 
-## Android 1.3 source update
+## Android 1.3
 
-This branch contains the feature implementation. No 1.3 APK has been built or device-tested yet.
+[Download the signed APK from GitHub](https://github.com/alimuhammed8287/GMaps-redirect/releases/download/v1.3/snap-to-maps-v1.3.apk). This is a pre-release for Redmi Note 12 5G / Android 14 testing. Compilation, all 10 address-selection tests, lint (0 errors, 8 warnings), release contents, and the permanent signing identity are verified. Physical-device and emulator testing remain pending.
 
 - Share **one screenshot** from the screenshot toolbar or gallery to **Snap to Maps**. A translucent receiver reads the bottom address, saves it in history, and opens Google Maps without showing the settings/history screen.
 - **Bike / Car** is remembered. Bike means motorized two-wheeler, and is the default. Screenshot shares, capture shortcuts, and history use this setting. A running scan keeps the mode selected when it began.
@@ -49,9 +49,9 @@ References: [Maps URLs](https://developers.google.com/maps/documentation/urls/ge
 
 ## Validation and build
 
-See [the 1.3 validation checklist](docs/validation-1.3.md). Source syntax and manifest checks are separate from compilation, unit execution, and device tests.
+See [the 1.3 validation record and device checklist](docs/validation-1.3.md). The successful [GitHub build](https://github.com/alimuhammed8287/GMaps-redirect/actions/runs/41402186046) contains the signed APK and validation reports. These automated checks do not replace device testing.
 
-The Android project is in `android/`. After explicit build approval, run:
+The Android project is in `android/`. For future builds, after explicit build approval, run:
 
 ```
 gradle --no-daemon -p android :app:testDebugUnitTest :app:lintDebug :app:assembleRelease
