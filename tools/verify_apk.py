@@ -80,7 +80,23 @@ def main():
     assert alias.get(android + "enabled") == "false"
     assert qualified(alias.get(android + "targetActivity")) == package + ".CaptureActivity"
     assert service.get(android + "permission") == "android.permission.BIND_ACCESSIBILITY_SERVICE"
-    config = ET.fromstring(run(analyzer, "resources", "xml", "--file", "res/xml/capture_service.xml", args.apk))
+    def resource_file(kind, name):
+        # Release resource optimization can shorten file paths. Resolve through resources.arsc.
+        configs = run(analyzer, "resources", "configs", "--type", kind, "--package", package, args.apk).splitlines()
+        for variant in configs:
+            names = run(analyzer, "resources", "names", "--config", variant.strip(),
+                        "--type", kind, "--package", package, args.apk)
+            if not re.search(r"\b" + re.escape(name) + r"\b", names):
+                continue
+            value = run(analyzer, "resources", "value", "--config", variant.strip(),
+                        "--name", name, "--type", kind, "--package", package, args.apk)
+            path = re.search(r"res/[^\s\"']+", value)
+            if path:
+                return path.group(0)
+        raise AssertionError("Packaged resource missing: " + kind + "/" + name)
+    capture_config_path = resource_file("xml", "capture_service")
+    capture_icon_path = resource_file("drawable", "ic_capture")
+    config = ET.fromstring(run(analyzer, "resources", "xml", "--file", capture_config_path, args.apk))
     assert config.get(android + "canTakeScreenshot") == "true"
     assert config.get(android + "canRetrieveWindowContent") == "true"
     assert config.get(android + "isAccessibilityTool") == "false"
@@ -95,7 +111,7 @@ def main():
                 data = apk.read(name)
                 classes.update(dex_classes(data))
                 dex_data += data
-        assert "res/drawable/ic_capture.xml" in apk.namelist(), "Extra icon is absent"
+        assert capture_icon_path in apk.namelist(), "Extra icon is absent"
     for name in expected_classes:
         assert "Lcom/snapmaps/app/" + name + ";" in classes, "Missing class: " + name
     for text in [b"two-wheeler", b"driving", b"dir_action", b"navigate", b"travel_mode",
