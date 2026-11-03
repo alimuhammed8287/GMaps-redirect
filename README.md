@@ -2,7 +2,17 @@
 
 Android screenshot-to-navigation app, with an older web prototype at the repository root.
 
-## Android 1.3
+## Android 1.4
+
+[Download the signed v1.4 APK from GitHub](https://github.com/alimuhammed8287/GMaps-redirect/releases/download/v1.4/snap-to-maps-v1.4.apk). Install over v1.3; the signing key is unchanged.
+
+This pre-release addresses the second launcher opening the ride app without completing the Maps handoff: capture tolerates brief window transitions, extracted addresses are saved before handoff, a dedicated internal activity opens Maps, and older scan requests cannot take over a newer scan. The status distinguishes observed Maps opening from an unconfirmed handoff and includes screenshot error codes. Bike/Car, screenshot sharing and normal history access remain available.
+
+[Build 41664840887](https://github.com/alimuhammed8287/GMaps-redirect/actions/runs/41664840887) passed 24 regression tests, lint (0 errors, 8 warnings), release compilation, APK contents and permanent signature checks. The downloaded APK hash/signature were rechecked locally. **No physical-device or emulator integration test has run**; Redmi background-launch restrictions may still affect automatic opening. See [capture fix validation](docs/capture-handoff-fix.md).
+
+Recommended device check: leave a live ride address visible and trigger Scan to Maps five times. Check automatic Maps opening, Bike mode and history; if an attempt fails, read the status in the normal app.
+
+## Android 1.3 (previous release)
 
 [Download the signed APK from GitHub](https://github.com/alimuhammed8287/GMaps-redirect/releases/download/v1.3/snap-to-maps-v1.3.apk). This is a pre-release for Redmi Note 12 5G / Android 14 testing. Compilation, all 10 address-selection tests, lint (0 errors, 8 warnings), release contents, and the permanent signing identity are verified. Physical-device and emulator testing remain pending.
 
