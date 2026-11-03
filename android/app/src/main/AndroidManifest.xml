@@ -37,6 +37,9 @@
         <activity android:name=".CaptureActivity" android:exported="true"
             android:label="Scan to Maps" android:excludeFromRecents="true"
             android:taskAffinity="com.snapmaps.app.capture" android:theme="@style/Theme.SnapMaps.Share" />
+        <activity android:name=".MapsHandoffActivity" android:exported="false"
+            android:excludeFromRecents="true" android:taskAffinity="com.snapmaps.app.handoff"
+            android:theme="@style/Theme.SnapMaps.Share" />
         <activity-alias android:name=".CaptureLauncher" android:targetActivity=".CaptureActivity"
             android:enabled="false" android:exported="true" android:label="Scan to Maps"
             android:icon="@drawable/ic_capture">

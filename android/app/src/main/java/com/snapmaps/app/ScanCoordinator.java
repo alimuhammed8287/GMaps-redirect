@@ -15,9 +15,16 @@ final class ScanCoordinator {
         void onError(String message);
     }
     static final class Request {
+        private final long generation;
         private volatile boolean cancelled;
         private boolean submitted;
         private Thread runningThread;
+
+        private Request(long generation) { this.generation = generation; }
+
+        boolean isLatest() {
+            synchronized (ScanCoordinator.class) { return generation == serial && !cancelled; }
+        }
 
         boolean isCurrent() { synchronized (ScanCoordinator.class) { return active == this && !cancelled; } }
 
@@ -68,11 +75,16 @@ final class ScanCoordinator {
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static Request active;
+    private static long serial;
     private ScanCoordinator() { }
+
+    static synchronized boolean busy() { return active != null; }
+
+    static synchronized long generation() { return serial; }
 
     static synchronized Request begin() {
         if (active != null) return null;
-        active = new Request();
+        active = new Request(++serial);
         return active;
     }
 }

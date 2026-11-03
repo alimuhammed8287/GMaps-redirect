@@ -56,8 +56,8 @@ def main():
     android = "{http://schemas.android.com/apk/res/android}"
     package = manifest.get("package")
     assert package == "com.snapmaps.app", "Wrong application ID"
-    assert manifest.get(android + "versionName") == "1.3", "Wrong version name"
-    assert manifest.get(android + "versionCode") == "4", "Wrong version code"
+    assert manifest.get(android + "versionName") == "1.4", "Wrong version name"
+    assert manifest.get(android + "versionCode") == "5", "Wrong version code"
     sdk_config = manifest.find("uses-sdk")
     assert sdk_config.get(android + "minSdkVersion") == "23"
     assert sdk_config.get(android + "targetSdkVersion") == "35"
@@ -70,6 +70,11 @@ def main():
     normal = components[package + ".MainActivity"]
     share = components[package + ".ShareActivity"]
     capture = components[package + ".CaptureActivity"]
+    handoff = components[package + ".MapsHandoffActivity"]
+    assert handoff.get(android + "exported") == "false"
+    assert not handoff.findall("intent-filter")
+    assert handoff.get(android + "excludeFromRecents") == "true"
+    assert handoff.get(android + "taskAffinity") == package + ".handoff"
     alias = components[package + ".CaptureLauncher"]
     service = components[package + ".CaptureService"]
     assert normal.get(android + "enabled", "true") == "true"
@@ -102,7 +107,7 @@ def main():
     assert config.get(android + "isAccessibilityTool") == "false"
 
     expected_classes = {"MainActivity", "ShareActivity", "CaptureActivity", "CaptureService",
-                        "AppSettings", "HistoryStore", "MapsLauncher", "OcrReader", "AddressExtractor", "ScanCoordinator"}
+                        "CaptureGate", "MapsHandoffActivity", "AppSettings", "HistoryStore", "MapsLauncher", "OcrReader", "AddressExtractor", "ScanCoordinator"}
     classes = set()
     dex_data = b""
     with zipfile.ZipFile(args.apk) as apk:
@@ -115,12 +120,17 @@ def main():
     for name in expected_classes:
         assert "Lcom/snapmaps/app/" + name + ";" in classes, "Missing class: " + name
     for text in [b"two-wheeler", b"driving", b"dir_action", b"navigate", b"travel_mode",
-                 b"Show additional Scan to Maps icon", b"history"]:
+                 b"Show additional Scan to Maps icon", b"history", b"generation",
+                 b"Address saved and Google Maps opened.", b"Waiting for the ride address screen..."]:
         assert text in dex_data, "Missing packaged setting/behavior: " + text.decode()
 
-    tests = ET.parse(root / "android/app/build/test-results/testDebugUnitTest/TEST-com.snapmaps.app.AddressExtractorTest.xml").getroot()
-    assert int(tests.get("tests")) == 10
-    assert int(tests.get("failures")) == 0 and int(tests.get("errors")) == 0 and int(tests.get("skipped")) == 0
+    suites = {"AddressExtractorTest": 10, "CaptureGateTest": 14}
+    passed = 0
+    for suite, count in suites.items():
+        tests = ET.parse(root / ("android/app/build/test-results/testDebugUnitTest/TEST-com.snapmaps.app." + suite + ".xml")).getroot()
+        assert int(tests.get("tests")) == count, "Missing tests in " + suite
+        assert all(int(tests.get(key)) == 0 for key in ("failures", "errors", "skipped")), "Failed tests in " + suite
+        passed += count
     lint = ET.parse(root / "android/app/build/reports/lint-results-debug.xml").getroot()
     errors = [issue for issue in lint.findall("issue") if issue.get("severity") in {"Error", "Fatal"}]
     assert not errors, "Android lint contains errors"
@@ -129,10 +139,10 @@ def main():
         "sha256": hashlib.sha256(args.apk.read_bytes()).hexdigest(),
         "certificate_sha256": certificate,
         "application_id": package,
-        "version_name": "1.3", "version_code": 4, "min_sdk": 23, "target_sdk": 35,
+        "version_name": "1.4", "version_code": 5, "min_sdk": 23, "target_sdk": 35,
         "signature_verified": True,
         "verified_classes": sorted(expected_classes),
-        "unit_tests": {"passed": 10, "failed": 0, "skipped": 0},
+        "unit_tests": {"passed": passed, "failed": 0, "skipped": 0},
         "lint_errors": 0,
         "lint_warnings": len([i for i in lint.findall("issue") if i.get("severity") == "Warning"]),
         "source_commit": run("git", "rev-parse", "HEAD").strip(),

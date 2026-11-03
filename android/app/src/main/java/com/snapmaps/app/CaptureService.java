@@ -25,9 +25,10 @@ public final class CaptureService extends AccessibilityService {
     private ScanCoordinator.Request request;
     private String targetPackage = "";
     private String requestedMode;
-    private long startedAt, stableSince;
-    private int stableWindow = -1;
-    private boolean sourceSeen, reading;
+    private CaptureGate gate;
+    private String pendingAddress;
+    private long mapsStartedAt;
+    private long handoffGeneration;
     private String launcherPackage = "";
 
     static CaptureService connected() { return instance; }
@@ -51,14 +52,14 @@ public final class CaptureService extends AccessibilityService {
         if (excluded(target)) return "Open your ride app before capturing an address.";
         ScanCoordinator.Request next = ScanCoordinator.begin();
         if (next == null) return "Another scan is already running. Please wait.";
+        handler.removeCallbacks(checkMaps);
+        mapsStartedAt = 0;
         request = next;
         targetPackage = target;
         requestedMode = AppSettings.mode(this);
-        startedAt = SystemClock.uptimeMillis();
-        stableSince = 0;
-        stableWindow = -1;
-        sourceSeen = false;
-        reading = false;
+        gate = new CaptureGate(SystemClock.uptimeMillis());
+        pendingAddress = null;
+        AppSettings.recordStatus(this, "Waiting for the ride address screen...");
         handler.postDelayed(poll, 350);
         return null;
     }
@@ -66,30 +67,27 @@ public final class CaptureService extends AccessibilityService {
     private final Runnable poll = new Runnable() {
         @Override public void run() {
             if (request == null) return;
-            if (!request.isCurrent()) { reset(); return; }
+            if (!request.isLatest()) { reset(); return; }
+            if (pendingAddress == null && !request.isCurrent()) { reset(); return; }
             if (locked()) { cancelCapture("Capture cancelled because the phone was locked."); return; }
-            long now = SystemClock.uptimeMillis();
             Window window = topApplication(false);
-            boolean sourceVisible = window != null && targetPackage.equals(window.packageName);
-            if (!sourceVisible) {
-                if (sourceSeen) { cancelCapture("Capture cancelled because you left the ride app."); return; }
-                if (now - startedAt > 8000) { cancelCapture("The ride app did not become visible. Open its address screen and try again."); return; }
-                stableSince = 0;
-                stableWindow = -1;
-            } else {
-                sourceSeen = true;
-                if (reading && stableWindow != window.id) {
-                    cancelCapture("Capture cancelled because the ride window changed. Try again on the address screen.");
-                    return;
-                }
-                if (now - startedAt > 90000) { cancelCapture("Reading the address timed out. Try sharing the screenshot instead."); return; }
-                if (!reading) {
-                    if (stableWindow != window.id) { stableWindow = window.id; stableSince = now; }
-                    if (now - stableSince >= 900) {
-                        reading = true;
-                        capture(window);
-                    }
-                }
+            CaptureGate.Screen screen = window != null && targetPackage.equals(window.packageName)
+                    ? CaptureGate.Screen.TARGET
+                    : window == null || getPackageName().equals(window.packageName)
+                    ? CaptureGate.Screen.TRANSITION : CaptureGate.Screen.OTHER;
+            CaptureGate.Decision decision = gate.observe(SystemClock.uptimeMillis(), screen,
+                    window == null ? -1 : window.id);
+            switch (decision) {
+                case CAPTURE: capture(window); break;
+                case READY:
+                    if (pendingAddress != null) { openCapturedAddress(); return; }
+                    break;
+                case LEFT: cancelCapture("Capture cancelled because you left the ride app."); return;
+                case UNCONFIRMED: cancelCapture("The ride screen could not be confirmed. Keep its address visible and try again."); return;
+                case CHANGED: cancelCapture("Capture cancelled because the ride window changed. Try again on the address screen."); return;
+                case TIMEOUT: cancelCapture("Reading the address timed out. Try sharing the screenshot instead."); return;
+                case NOT_VISIBLE: cancelCapture("The ride app did not become visible. Open its address screen and try again."); return;
+                case WAIT: break;
             }
             if (request != null) handler.postDelayed(this, 180);
         }
@@ -122,20 +120,12 @@ public final class CaptureService extends AccessibilityService {
                 owner.read(CaptureService.this, () -> captured, new ScanCoordinator.Listener() {
                     @Override public void onAddress(String address) {
                         if (request != owner) return;
-                        Window visible = topApplication(false);
-                        if (locked() || visible == null || visible.id != stableWindow
-                                || !targetPackage.equals(visible.packageName)) {
-                            cancelCapture("Capture cancelled because you left the ride app.");
-                            return;
-                        }
-                        String mode = requestedMode;
-                        reset();
-                        try {
-                            MapsLauncher.directions(CaptureService.this, address, mode);
-                            AppSettings.recordStatus(CaptureService.this, "Destination saved and sent to Maps.");
-                        } catch (RuntimeException unavailable) {
-                            report("Could not open Maps. The address is saved in history.");
-                        }
+                        pendingAddress = address;
+                        // Retain a successfully read destination even if the user switches away
+                        // before the final visibility check. Never open Maps over another app.
+                        HistoryStore.save(CaptureService.this, address);
+                        handler.removeCallbacks(poll);
+                        handler.post(poll);
                     }
                     @Override public void onError(String message) {
                         if (request != owner) return;
@@ -147,7 +137,7 @@ public final class CaptureService extends AccessibilityService {
 
             @Override public void onFailure(int errorCode) {
                 if (request != owner || !owner.isCurrent()) return;
-                cancelCapture("Android could not capture this screen. It may be protected; try screenshot sharing.");
+                cancelCapture("Android could not capture this screen (error " + errorCode + "). Try screenshot sharing.");
             }
         };
         try {
@@ -169,7 +159,43 @@ public final class CaptureService extends AccessibilityService {
         }
     }
 
+    private void openCapturedAddress() {
+        String address = pendingAddress;
+        String mode = requestedMode;
+        handoffGeneration = ScanCoordinator.generation();
+        reset();
+        try {
+            // A dedicated foreground activity performs the external-app handoff. It
+            // never runs OCR or changes the selected ride app / normal launcher state.
+            startActivity(new Intent(this, MapsHandoffActivity.class)
+                    .putExtra("address", address).putExtra("mode", mode)
+                    .putExtra("generation", handoffGeneration)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            AppSettings.recordStatus(this, "Address saved. Waiting for Google Maps to open...");
+            mapsStartedAt = SystemClock.uptimeMillis();
+            handler.postDelayed(checkMaps, 250);
+        } catch (RuntimeException unavailable) {
+            report("Address saved in history, but Maps could not open. Open it from history.");
+        }
+    }
+
+    private final Runnable checkMaps = new Runnable() {
+        @Override public void run() {
+            if (mapsStartedAt == 0) return;
+            if (handoffGeneration != ScanCoordinator.generation()) { mapsStartedAt = 0; return; }
+            Window visible = topApplication(false);
+            if (visible != null && "com.google.android.apps.maps".equals(visible.packageName)) {
+                mapsStartedAt = 0;
+                AppSettings.recordStatus(CaptureService.this, "Address saved and Google Maps opened.");
+            } else if (SystemClock.uptimeMillis() - mapsStartedAt >= 6000) {
+                mapsStartedAt = 0;
+                report("Address saved, but Google Maps did not appear. Open it from history. Check your phone's background pop-up permissions for Snap to Maps.");
+            } else handler.postDelayed(this, 250);
+        }
+    };
+
     void cancelCapture(String message) {
+        if (pendingAddress != null) message = "Address saved in history. " + message;
         if (request != null) request.cancel();
         reset();
         report(message);
@@ -179,8 +205,8 @@ public final class CaptureService extends AccessibilityService {
         handler.removeCallbacks(poll);
         request = null;
         targetPackage = "";
-        reading = false;
-        sourceSeen = false;
+        pendingAddress = null;
+        gate = null;
     }
 
     private boolean locked() {
@@ -249,6 +275,8 @@ public final class CaptureService extends AccessibilityService {
 
     @Override public boolean onUnbind(Intent intent) {
         if (request != null) request.cancel();
+        handler.removeCallbacks(checkMaps);
+        mapsStartedAt = 0;
         reset();
         if (instance == this) instance = null;
         return super.onUnbind(intent);
@@ -256,6 +284,8 @@ public final class CaptureService extends AccessibilityService {
 
     @Override public void onDestroy() {
         if (request != null) request.cancel();
+        handler.removeCallbacks(checkMaps);
+        mapsStartedAt = 0;
         reset();
         if (instance == this) instance = null;
         super.onDestroy();

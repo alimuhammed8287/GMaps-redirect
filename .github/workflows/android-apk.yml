@@ -56,9 +56,9 @@ jobs:
       - name: Verify release contents and permanent signing identity
         run: |
           mkdir -p release
-          cp android/app/build/outputs/apk/release/app-release.apk release/snap-to-maps-v1.3.apk
-          python3 tools/verify_apk.py release/snap-to-maps-v1.3.apk --report release/verification.json
-          sha256sum release/snap-to-maps-v1.3.apk > release/SHA256SUMS.txt
+          cp android/app/build/outputs/apk/release/app-release.apk release/snap-to-maps-v1.4.apk
+          python3 tools/verify_apk.py release/snap-to-maps-v1.4.apk --report release/verification.json
+          sha256sum release/snap-to-maps-v1.4.apk > release/SHA256SUMS.txt
       - uses: actions/upload-artifact@v7
         with:
           name: snap-maps-signed-apk
